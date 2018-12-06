@@ -21,6 +21,7 @@ from webscanners import web_views
 from webscanners.zapscanner.views import launch_zap_scan
 from networkscanners import views
 from networkscanners.serializers import NetworkScanSerializer, NetworkScanResultSerializer
+from serializers import CreateUser
 from rest_framework import generics
 import uuid
 from projects.serializers import ProjectDataSerializers
@@ -38,6 +39,13 @@ import json
 from rest_framework.parsers import MultiPartParser, FormParser
 from staticscanners.models import bandit_scan_db, bandit_scan_results_db
 from scanners.scanner_parser.staticscanner_parser.bandit_report_parser import bandit_report_json
+from django.contrib.auth.models import User
+from stronghold.decorators import public
+from rest_framework import authentication, permissions
+from webscanners.arachniscanner.views import launch_arachni_scan
+from scanners.scanner_parser.staticscanner_parser import dependencycheck_report_parser
+from lxml import etree
+from staticscanners.models import dependencycheck_scan_db
 
 
 class WebScan(generics.ListCreateAPIView):
@@ -103,6 +111,14 @@ class WebScan(generics.ListCreateAPIView):
                     # time.sleep(5)
                 except Exception as e:
                     print e
+            elif scanner == 'arachni':
+                thread = threading.Thread(target=launch_arachni_scan, args=(target_url,
+                                                                            project_id,
+                                                                            rescanid,
+                                                                            rescan,
+                                                                            scan_id))
+                thread.daemon = True
+                thread.start()
 
             if not target_url:
                 return Response({"error": "No name passed"})
@@ -241,6 +257,28 @@ class NetworkScanResult(generics.ListCreateAPIView):
             return Response(serialized_scans.data)
 
 
+@public
+class CreateUsers(generics.CreateAPIView):
+    authentication_classes = ()
+    permission_classes = ()
+    serializer_class = CreateUser
+
+    def post(self, request, format=None, **kwargs):
+        """
+            Post request to get all vulnerability Data.
+        """
+        serializer = CreateUser(data=request.data)
+        if serializer.is_valid():
+            username = request.data.get('username')
+            password = request.data.get('password')
+            email = request.data.get('email')
+            user = User.objects.create_user(username, email, password)
+            user.save()
+
+            return Response({"message": "User Created !!!"})
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
 class UpladScanResult(APIView):
     parser_classes = (MultiPartParser,)
 
@@ -368,6 +406,26 @@ class UpladScanResult(APIView):
             bandit_report_json(data=data,
                                project_id=project_id,
                                scan_id=scan_id)
+            return Response({"message": "Scan Data Uploaded",
+                             "project_id": project_id,
+                             "scan_id": scan_id,
+                             "scanner": scanner
+                             })
+
+        elif scanner == 'dependencycheck':
+            date_time = datetime.datetime.now()
+            scan_dump = dependencycheck_scan_db(
+                project_name=scan_url,
+                scan_id=scan_id,
+                date_time=date_time,
+                project_id=project_id,
+                scan_status=scan_status
+            )
+            scan_dump.save()
+            data = etree.parse(xml_file)
+            dependencycheck_report_parser.xml_parser(project_id=project_id,
+                                                     scan_id=scan_id,
+                                                     data=data)
             return Response({"message": "Scan Data Uploaded",
                              "project_id": project_id,
                              "scan_id": scan_id,
